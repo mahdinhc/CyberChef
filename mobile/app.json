@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "CyberChef",
+    "slug": "cyberchef-mobile",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
+    "splash": { "image": "./assets/splash.png", "resizeMode": "contain", "backgroundColor": "#0E1214" },
+    "android": {
+      "package": "uk.gov.gchq.cyberchef.mobile",
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#0E1214" }
+    }
+  }
+}
