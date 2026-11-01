@@ -75,3 +75,27 @@ export function fromRecipeConfig(cfg, ops) {
     return { uid: nextUid(), name: c.op, args, disabled: !!c.disabled, open: false };
   });
 }
+
+// Short one-line summary of a step's current arguments (shown on collapsed cards)
+export function stepSummary(step, def) {
+  const parts = [];
+  def.a.forEach((a, i) => {
+    if (parts.length >= 2 || a.type === "label") return;
+    let v = step.args[i];
+    if (v && typeof v === "object") v = v.string;
+    if (v === undefined || v === null || v === "" || v === false) return;
+    v = v === true ? a.name : String(v).replace(/\s+/g, " ");
+    parts.push(v.length > 18 ? v.slice(0, 18) + "\u2026" : v);
+  });
+  return parts.join("  \u00b7  ");
+}
+
+export const STARTER_PRESETS = [
+  { id: "starter-b64d", name: "Decode Base64", recipe: [{ op: "From Base64" }] },
+  { id: "starter-b64e", name: "Encode Base64", recipe: [{ op: "To Base64" }] },
+  { id: "starter-hex", name: "Hex to text", recipe: [{ op: "From Hex" }] },
+  { id: "starter-url", name: "URL decode", recipe: [{ op: "URL Decode" }] },
+  { id: "starter-rot13", name: "ROT13", recipe: [{ op: "ROT13" }] },
+  { id: "starter-md5", name: "MD5 hash", recipe: [{ op: "MD5" }] },
+  { id: "starter-magic", name: "Magic (auto-detect)", recipe: [{ op: "Magic" }] }
+];

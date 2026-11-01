@@ -1,24 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  View, Text, TextInput, ScrollView, Pressable, ActivityIndicator, Share, BackHandler, StyleSheet
+  View, Text, TextInput, ScrollView, Pressable, ActivityIndicator, Share, BackHandler, StyleSheet, Image
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { EngineProvider, useEngine } from "./Engine";
-import { useTheme, MONO } from "./theme";
-import { newStep, toRecipeConfig, fromRecipeConfig } from "./args";
-import { IconBtn, Btn, StepCard, OperationPicker, RecipesModal } from "./components";
+import { Icon } from "./icons";
+import { useTheme, MONO, R } from "./theme";
+import { newStep, toRecipeConfig, fromRecipeConfig, STARTER_PRESETS } from "./args";
+import { IconBtn, Btn, Card, StepCard, OperationPicker, PresetsModal } from "./components";
 
 const K = { state: "cc:state", favs: "cc:favs", saved: "cc:saved" };
+const logo = require("../assets/icon.png");
 
 function Main() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const engine = useEngine();
-  const { ready, ops, categories, bake, error: engineError } = engine;
+  const { ready, ops, categories, bake, error: engineError } = useEngine();
 
   const [tab, setTab] = useState("recipe");
   const [input, setInput] = useState("");
@@ -27,9 +27,9 @@ function Main() {
   const [out, setOut] = useState({ text: "", error: null, duration: null });
   const [baking, setBaking] = useState(false);
   const [picker, setPicker] = useState(false);
-  const [recipes, setRecipes] = useState(false);
+  const [presetsOpen, setPresetsOpen] = useState(false);
   const [favs, setFavs] = useState([]);
-  const [saved, setSaved] = useState([]);
+  const [presets, setPresets] = useState([]);
   const [toast, setToast] = useState("");
   const [loaded, setLoaded] = useState(false);
   const toastTimer = useRef(null);
@@ -37,10 +37,10 @@ function Main() {
   const say = useCallback(m => {
     setToast(m);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 1600);
+    toastTimer.current = setTimeout(() => setToast(""), 1700);
   }, []);
 
-  // restore
+  // restore saved state
   useEffect(() => {
     (async () => {
       try {
@@ -55,13 +55,13 @@ function Main() {
           if (p.tab) setTab(p.tab);
         }
         if (f) setFavs(JSON.parse(f));
-        if (r) setSaved(JSON.parse(r));
+        if (r) setPresets(JSON.parse(r));
       } catch {}
       setLoaded(true);
     })();
   }, []);
 
-  // persist
+  // persist working state
   useEffect(() => {
     if (!loaded) return;
     const h = setTimeout(() => {
@@ -77,6 +77,7 @@ function Main() {
   const runBake = useCallback(async () => {
     if (!ready) return;
     if (!recipe.some(r => !r.disabled)) {
+      setBaking(false);
       setOut({ text: input, error: null, duration: 0 });
       return;
     }
@@ -93,16 +94,16 @@ function Main() {
     return () => clearTimeout(h);
   }, [auto, ready, runBake]);
 
-  // back button closes modals first
+  // hardware back button
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       if (picker) { setPicker(false); return true; }
-      if (recipes) { setRecipes(false); return true; }
+      if (presetsOpen) { setPresetsOpen(false); return true; }
       if (tab !== "recipe") { setTab("recipe"); return true; }
       return false;
     });
     return () => sub.remove();
-  }, [picker, recipes, tab]);
+  }, [picker, presetsOpen, tab]);
 
   const addOp = name => {
     setSteps(s => [...s.map(x => ({ ...x, open: false })), newStep(name, ops)]);
@@ -110,9 +111,11 @@ function Main() {
     setTab("recipe");
   };
   const updateStep = (uid, next) => setSteps(s => s.map(x => (x.uid === uid ? next : x)));
-  const moveStep = (i, d) => setSteps(s => {
-    const a = [...s]; const j = i + d;
-    if (j < 0 || j >= a.length) return s;
+  const moveStep = (uid, d) => setSteps(s => {
+    const i = s.findIndex(x => x.uid === uid);
+    const j = i + d;
+    if (i < 0 || j < 0 || j >= s.length) return s;
+    const a = [...s];
     [a[i], a[j]] = [a[j], a[i]];
     return a;
   });
@@ -123,26 +126,36 @@ function Main() {
   });
 
   const cleanRecipe = () => JSON.parse(JSON.stringify(recipe, (k, v) => (typeof v === "number" && Number.isNaN(v) ? null : v)));
-  const persistSaved = list => { setSaved(list); AsyncStorage.setItem(K.saved, JSON.stringify(list)).catch(() => {}); };
+  const persistPresets = list => { setPresets(list); AsyncStorage.setItem(K.saved, JSON.stringify(list)).catch(() => {}); };
 
-  const saveRecipe = name => {
-    persistSaved([{ id: String(Date.now()), name, recipe: cleanRecipe() }, ...saved]);
-    say("Recipe saved");
+  const savePreset = (name, withInput) => {
+    const p = { id: String(Date.now()), name, recipe: cleanRecipe() };
+    if (withInput) p.input = input;
+    persistPresets([p, ...presets]);
+    say(`Preset “${name}” saved`);
   };
-  const loadRecipe = r => {
-    setSteps(fromRecipeConfig(r.recipe, ops));
-    setRecipes(false);
+  const loadPreset = (p, mode) => {
+    const next = fromRecipeConfig(p.recipe, ops);
+    if (!next.length) { say("Preset has no valid operations"); return; }
+    if (mode === "append") {
+      setSteps(s => [...s.map(x => ({ ...x, open: false })), ...next]);
+      say(`Added ${next.length} operation${next.length === 1 ? "" : "s"}`);
+    } else {
+      setSteps(next);
+      if (typeof p.input === "string") setInput(p.input);
+      say(`Loaded “${p.name}”`);
+    }
+    setPresetsOpen(false);
     setTab("recipe");
   };
-  const importRecipe = async () => {
+  const importPreset = async () => {
     try {
-      const txt = await Clipboard.getStringAsync();
-      const parsed = JSON.parse(txt);
+      const parsed = JSON.parse(await Clipboard.getStringAsync());
       const cfg = Array.isArray(parsed) ? parsed : parsed.recipe;
       const next = fromRecipeConfig(cfg, ops);
       if (!next.length) throw new Error("empty");
       setSteps(next);
-      setRecipes(false);
+      setPresetsOpen(false);
       setTab("recipe");
       say(`Imported ${next.length} operations`);
     } catch {
@@ -154,137 +167,190 @@ function Main() {
 
   if (engineError) {
     return (
-      <View style={[S.center, { backgroundColor: t.bg }]}>
-        <MaterialIcons name="error-outline" size={48} color={t.danger} />
-        <Text style={{ color: t.text, marginTop: 12, fontSize: 16 }}>{engineError}</Text>
+      <View style={[S.center, { backgroundColor: t.bg, padding: 32 }]}>
+        <Icon name="error" size={56} color={t.danger} />
+        <Text style={{ color: t.text, marginTop: 14, fontSize: 17, fontWeight: "700", textAlign: "center" }}>{engineError}</Text>
       </View>
     );
   }
 
+  const onPrimary = t.dark ? t.onPrimary : "#fff";
+  const activeCount = validSteps.filter(s => !s.disabled).length;
+
+  /* ---------------- header ---------------- */
   const header = (
-    <View style={{ paddingTop: insets.top, backgroundColor: t.surface, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.border }}>
-      <View style={{ height: 56, flexDirection: "row", alignItems: "center", paddingLeft: 16, paddingRight: 4 }}>
-        <MaterialIcons name="restaurant" size={22} color={t.primary} />
-        <Text style={{ flex: 1, color: t.text, fontSize: 20, fontWeight: "700", marginLeft: 10 }}>CyberChef</Text>
-        <IconBtn name="folder-open" onPress={() => setRecipes(true)} disabled={!ready} />
-        <IconBtn name="bolt" color={auto ? t.primary : t.sub} onPress={() => { setAuto(!auto); say(auto ? "Auto bake off" : "Auto bake on"); }} />
-        <IconBtn name="play-arrow" color={t.primary} onPress={() => { runBake(); setTab("output"); }} disabled={!ready} />
+    <View style={{ paddingTop: insets.top, backgroundColor: t.surface, borderBottomWidth: 1, borderBottomColor: t.border }}>
+      <View style={{ height: 64, flexDirection: "row", alignItems: "center", paddingLeft: 16, paddingRight: 6 }}>
+        <Image source={logo} style={{ width: 36, height: 36, borderRadius: 10 }} />
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={{ color: t.text, fontSize: 19, fontWeight: "800", letterSpacing: 0.2 }}>CyberChef</Text>
+          <Text style={{ color: t.sub, fontSize: 11.5, marginTop: 1 }}>
+            {ready ? `${activeCount} step${activeCount === 1 ? "" : "s"} · auto-bake ${auto ? "on" : "off"}` : "starting engine…"}
+          </Text>
+        </View>
+        <IconBtn name="bookmark" color={t.primary} onPress={() => setPresetsOpen(true)} disabled={!ready} />
+        <IconBtn name="bolt" color={auto ? t.warn : t.sub} onPress={() => { setAuto(!auto); say(auto ? "Auto-bake off" : "Auto-bake on"); }} />
+        <View style={{ width: 4 }} />
+        <IconBtn name="play" filled size={24} onPress={() => { runBake(); setTab("output"); }} disabled={!ready} />
+        <View style={{ width: 4 }} />
       </View>
-      {baking ? <ActivityIndicator size="small" color={t.primary} style={{ position: "absolute", right: 14, bottom: -22 }} /> : null}
+      {baking ? <View style={{ height: 2, backgroundColor: t.primary }} /> : <View style={{ height: 2 }} />}
     </View>
   );
 
+  /* ---------------- bottom nav ---------------- */
   const nav = (
     <View style={{
       flexDirection: "row", backgroundColor: t.surface, paddingBottom: insets.bottom,
-      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border
+      borderTopWidth: 1, borderTopColor: t.border
     }}>
       {[["input", "Input", "edit"], ["recipe", "Recipe", "tune"], ["output", "Output", "terminal"]].map(([k, l, ic]) => {
         const on = tab === k;
         return (
-          <Pressable key={k} onPress={() => setTab(k)} android_ripple={{ color: t.border }} style={{ flex: 1, alignItems: "center", paddingVertical: 10 }}>
-            <View style={{ paddingHorizontal: 20, paddingVertical: 4, borderRadius: 16, backgroundColor: on ? t.chip : "transparent" }}>
-              <MaterialIcons name={ic} size={24} color={on ? t.primary : t.sub} />
+          <Pressable key={k} onPress={() => setTab(k)} android_ripple={{ color: t.border }} style={{ flex: 1, alignItems: "center", paddingTop: 10, paddingBottom: 10 }}>
+            <View style={{ width: 64, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: on ? t.primaryDim : "transparent" }}>
+              <Icon name={ic} size={22} color={on ? t.primary : t.sub} />
               {k === "recipe" && validSteps.length ? (
-                <View style={{ position: "absolute", top: -2, right: 8, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: t.primary, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 }}>
-                  <Text style={{ color: t.dark ? t.onPrimary : "#fff", fontSize: 10, fontWeight: "800" }}>{validSteps.length}</Text>
+                <View style={{ position: "absolute", top: -3, right: 4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: t.primary, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 }}>
+                  <Text style={{ color: onPrimary, fontSize: 10, fontWeight: "800" }}>{validSteps.length}</Text>
                 </View>
               ) : null}
             </View>
-            <Text style={{ color: on ? t.text : t.sub, fontSize: 12, fontWeight: on ? "700" : "500", marginTop: 2 }}>{l}</Text>
+            <Text style={{ color: on ? t.text : t.sub, fontSize: 12, fontWeight: on ? "800" : "500", marginTop: 4 }}>{l}</Text>
           </Pressable>
         );
       })}
     </View>
   );
 
+  /* ---------------- tab bodies ---------------- */
   let body;
   if (!ready) {
     body = (
       <View style={S.center}>
-        <ActivityIndicator size="large" color={t.primary} />
-        <Text style={{ color: t.sub, marginTop: 14 }}>Starting CyberChef engine…</Text>
+        <Image source={logo} style={{ width: 88, height: 88, borderRadius: 22 }} />
+        <ActivityIndicator size="small" color={t.primary} style={{ marginTop: 28 }} />
+        <Text style={{ color: t.sub, marginTop: 12, fontSize: 13 }}>Loading all CyberChef operations…</Text>
       </View>
     );
   } else if (tab === "input") {
     body = (
-      <View style={{ flex: 1, padding: 12 }}>
+      <View style={{ flex: 1, padding: 14 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+          <Text style={{ flex: 1, color: t.text, fontSize: 18, fontWeight: "800" }}>Input</Text>
+          <Text style={{ color: t.sub, fontSize: 12 }}>{input.length} chars · {input ? input.split("\n").length : 0} lines</Text>
+        </View>
         <TextInput
-          value={input} onChangeText={setInput} multiline autoCapitalize="none" autoCorrect={false}
-          placeholder="Type or paste your input here" placeholderTextColor={t.sub} selectionColor={t.primary}
+          value={input} onChangeText={setInput} multiline autoCapitalize="none" autoCorrect={false} spellCheck={false}
+          placeholder="Type or paste your input here…" placeholderTextColor={t.sub} selectionColor={t.primary}
           style={{
-            flex: 1, color: t.text, backgroundColor: t.surface, borderRadius: 20, padding: 16, fontFamily: MONO, fontSize: 14,
-            textAlignVertical: "top", borderWidth: 1, borderColor: t.border
+            flex: 1, color: t.text, backgroundColor: t.surface, borderRadius: R.card, padding: 16, fontFamily: MONO,
+            fontSize: 14, lineHeight: 21, textAlignVertical: "top", borderWidth: 1, borderColor: t.border
           }}
         />
-        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 10, gap: 8 }}>
-          <Text style={{ flex: 1, color: t.sub, fontSize: 12 }}>{input.length} chars · {input ? input.split("\n").length : 0} lines</Text>
-          <Btn label="Paste" icon="content-paste" tonal onPress={async () => setInput(await Clipboard.getStringAsync())} />
-          <Btn label="Clear" icon="clear" tonal onPress={() => setInput("")} disabled={!input} />
+        <View style={{ flexDirection: "row", marginTop: 12 }}>
+          <Btn label="Paste" icon="paste" variant="tonal" style={{ flex: 1, marginRight: 8 }} onPress={async () => setInput(await Clipboard.getStringAsync())} />
+          <Btn label="Clear" icon="close" variant="tonal" style={{ flex: 1 }} onPress={() => setInput("")} disabled={!input} />
         </View>
       </View>
     );
   } else if (tab === "recipe") {
     body = (
       <View style={{ flex: 1 }}>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingTop: 12, paddingBottom: 100 }}>
-          {validSteps.length === 0 ? (
-            <View style={{ alignItems: "center", marginTop: 72, paddingHorizontal: 32 }}>
-              <MaterialIcons name="auto-awesome" size={56} color={t.primary} />
-              <Text style={{ color: t.text, fontSize: 18, fontWeight: "700", marginTop: 14 }}>Build your recipe</Text>
-              <Text style={{ color: t.sub, textAlign: "center", marginTop: 6 }}>
-                Add operations to encode, decode, encrypt, hash and analyse data. Try “From Base64” or “Magic”.
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingTop: 14, paddingBottom: 110 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 18, marginBottom: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: t.text, fontSize: 18, fontWeight: "800" }}>Recipe</Text>
+              <Text style={{ color: t.sub, fontSize: 12, marginTop: 2 }}>
+                {validSteps.length ? `${validSteps.length} operation${validSteps.length === 1 ? "" : "s"}` : "No operations yet"}
               </Text>
             </View>
+            <Btn compact label="Presets" icon="bookmark-border" variant="outline" onPress={() => setPresetsOpen(true)} />
+            {validSteps.length ? (
+              <IconBtn name="delete" color={t.danger} onPress={() => setSteps([])} style={{ marginLeft: 4 }} />
+            ) : null}
+          </View>
+
+          {validSteps.length === 0 ? (
+            <Card style={{ marginHorizontal: 14, padding: 24, alignItems: "center" }}>
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: t.primaryDim, alignItems: "center", justifyContent: "center" }}>
+                <Icon name="sparkle" size={34} color={t.primary} />
+              </View>
+              <Text style={{ color: t.text, fontSize: 17, fontWeight: "800", marginTop: 16 }}>Build your recipe</Text>
+              <Text style={{ color: t.sub, textAlign: "center", marginTop: 6, lineHeight: 19 }}>
+                Chain operations to encode, decode, encrypt, hash and analyse data. Try “From Base64” or “Magic”, or load a saved preset.
+              </Text>
+              <View style={{ flexDirection: "row", marginTop: 18 }}>
+                <Btn label="Add operation" icon="add" onPress={() => setPicker(true)} style={{ marginRight: 8 }} />
+                <Btn label="Presets" icon="bookmark" variant="tonal" onPress={() => setPresetsOpen(true)} />
+              </View>
+            </Card>
           ) : validSteps.map((s, i) => (
             <StepCard
               key={s.uid} index={i} step={s} def={ops[s.name]} count={validSteps.length}
               onChange={n => updateStep(s.uid, n)}
-              onMove={d => moveStep(steps.indexOf(s), d)}
+              onMove={d => moveStep(s.uid, d)}
               onRemove={() => setSteps(x => x.filter(y => y.uid !== s.uid))}
               onToggle={() => updateStep(s.uid, { ...s, disabled: !s.disabled })}
             />
           ))}
-          {validSteps.length > 1 ? (
-            <Pressable onPress={() => setSteps([])} style={{ alignSelf: "center", padding: 12 }}>
-              <Text style={{ color: t.danger, fontWeight: "600" }}>Clear recipe</Text>
-            </Pressable>
-          ) : null}
         </ScrollView>
+
         <Pressable
           onPress={() => setPicker(true)}
           android_ripple={{ color: "#ffffff30" }}
           style={{
-            position: "absolute", right: 16, bottom: 16, height: 56, paddingHorizontal: 20, borderRadius: 18,
-            backgroundColor: t.primary, flexDirection: "row", alignItems: "center", gap: 8, elevation: 6
+            position: "absolute", right: 16, bottom: 16, height: 56, paddingHorizontal: 22, borderRadius: 20,
+            backgroundColor: t.primary, flexDirection: "row", alignItems: "center", elevation: 6
           }}
         >
-          <MaterialIcons name="add" size={24} color={t.dark ? t.onPrimary : "#fff"} />
-          <Text style={{ color: t.dark ? t.onPrimary : "#fff", fontWeight: "700", fontSize: 15 }}>Add operation</Text>
+          <Icon name="add" size={24} color={onPrimary} />
+          <Text style={{ color: onPrimary, fontWeight: "800", fontSize: 15, marginLeft: 8 }}>Add operation</Text>
         </Pressable>
       </View>
     );
   } else {
+    const ok = !out.error;
     body = (
-      <View style={{ flex: 1, padding: 12 }}>
+      <View style={{ flex: 1, padding: 14 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+          <Text style={{ flex: 1, color: t.text, fontSize: 18, fontWeight: "800" }}>Output</Text>
+          {baking ? (
+            <ActivityIndicator size="small" color={t.primary} />
+          ) : (
+            <View style={{
+              flexDirection: "row", alignItems: "center", paddingHorizontal: 10, height: 28, borderRadius: 14,
+              backgroundColor: (ok ? t.success : t.danger) + "22"
+            }}>
+              <Icon name={ok ? "check-circle" : "error"} size={15} color={ok ? t.success : t.danger} />
+              <Text style={{ color: ok ? t.success : t.danger, fontSize: 12, fontWeight: "700", marginLeft: 6 }}>
+                {ok ? (out.duration != null ? `${out.duration} ms` : "Ready") : "Error"}
+              </Text>
+            </View>
+          )}
+        </View>
+
         {out.error ? (
-          <View style={{ backgroundColor: t.danger + "22", borderRadius: 14, padding: 12, marginBottom: 10, flexDirection: "row", gap: 8 }}>
-            <MaterialIcons name="error-outline" size={20} color={t.danger} />
-            <Text selectable style={{ flex: 1, color: t.danger, fontSize: 13 }}>{out.error}</Text>
+          <View style={{ backgroundColor: t.danger + "1F", borderRadius: R.field, padding: 12, marginBottom: 10, flexDirection: "row" }}>
+            <Icon name="error" size={18} color={t.danger} style={{ marginTop: 1, marginRight: 8 }} />
+            <Text selectable style={{ flex: 1, color: t.danger, fontSize: 13, lineHeight: 18 }}>{out.error}</Text>
           </View>
         ) : null}
-        <ScrollView style={{ flex: 1, backgroundColor: t.surface, borderRadius: 20, borderWidth: 1, borderColor: t.border }} contentContainerStyle={{ padding: 16 }}>
-          <Text selectable style={{ color: t.text, fontFamily: MONO, fontSize: 14 }}>
+
+        <ScrollView
+          style={{ flex: 1, backgroundColor: t.surface, borderRadius: R.card, borderWidth: 1, borderColor: t.border }}
+          contentContainerStyle={{ padding: 16 }}
+        >
+          <Text selectable style={{ color: out.text ? t.text : t.sub, fontFamily: MONO, fontSize: 14, lineHeight: 21 }}>
             {out.text || (baking ? "Baking…" : "Output will appear here")}
           </Text>
         </ScrollView>
-        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 10, gap: 8 }}>
-          <Text style={{ flex: 1, color: t.sub, fontSize: 12 }}>
-            {out.text.length} chars{out.duration != null ? ` · ${out.duration} ms` : ""}
-          </Text>
-          <Btn label="Copy" icon="content-copy" tonal onPress={() => copy(out.text)} disabled={!out.text} />
-          <Btn label="Share" icon="share" tonal onPress={() => Share.share({ message: out.text })} disabled={!out.text} />
-          <Btn label="To input" icon="input" tonal onPress={() => { setInput(out.text); setSteps([]); setTab("input"); }} disabled={!out.text} />
+
+        <Text style={{ color: t.sub, fontSize: 12, marginTop: 8 }}>{out.text.length} chars</Text>
+        <View style={{ flexDirection: "row", marginTop: 8 }}>
+          <Btn label="Copy" icon="copy" variant="tonal" compact style={{ flex: 1, marginRight: 8 }} onPress={() => copy(out.text)} disabled={!out.text} />
+          <Btn label="Share" icon="share" variant="tonal" compact style={{ flex: 1, marginRight: 8 }} onPress={() => Share.share({ message: out.text })} disabled={!out.text} />
+          <Btn label="To input" icon="input" variant="tonal" compact style={{ flex: 1 }} onPress={() => { setInput(out.text); setSteps([]); setTab("input"); }} disabled={!out.text} />
         </View>
       </View>
     );
@@ -297,8 +363,11 @@ function Main() {
       <View style={{ flex: 1 }}>{body}</View>
       {nav}
       {toast ? (
-        <View pointerEvents="none" style={{ position: "absolute", bottom: insets.bottom + 90, alignSelf: "center", backgroundColor: t.text, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10 }}>
-          <Text style={{ color: t.bg, fontWeight: "600" }}>{toast}</Text>
+        <View pointerEvents="none" style={{
+          position: "absolute", bottom: insets.bottom + 92, alignSelf: "center", backgroundColor: t.text,
+          borderRadius: R.pill, paddingHorizontal: 18, paddingVertical: 11, elevation: 8
+        }}>
+          <Text style={{ color: t.bg, fontWeight: "700", fontSize: 13 }}>{toast}</Text>
         </View>
       ) : null}
       {ready ? (
@@ -307,11 +376,12 @@ function Main() {
             visible={picker} ops={ops} categories={categories} favs={favs}
             onToggleFav={toggleFav} onPick={addOp} onClose={() => setPicker(false)}
           />
-          <RecipesModal
-            visible={recipes} saved={saved} onSave={saveRecipe} onLoad={loadRecipe}
-            onDelete={id => persistSaved(saved.filter(r => r.id !== id))}
+          <PresetsModal
+            visible={presetsOpen} presets={presets} starters={STARTER_PRESETS} canSave={validSteps.length > 0}
+            onSave={savePreset} onLoad={loadPreset}
+            onDelete={id => persistPresets(presets.filter(r => r.id !== id))}
             onCopy={() => copy(JSON.stringify(cleanRecipe(), null, 2), "Recipe JSON copied")}
-            onImport={importRecipe} onClose={() => setRecipes(false)}
+            onImport={importPreset} onClose={() => setPresetsOpen(false)}
           />
         </>
       ) : null}
