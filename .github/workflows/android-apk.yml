@@ -22,7 +22,9 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest already ships the Android SDK; just accept licenses so Gradle can fetch parts
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       # 1) Build the real CyberChef core into a single-file engine for the WebView
       - name: Install CyberChef dependencies
