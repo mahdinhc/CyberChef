@@ -30,6 +30,15 @@ jobs:
       - name: Install CyberChef dependencies
         run: npm ci
 
+      # The uploaded zip mangled the accented file names (Vigenère -> Vigen#U00e8re); restore valid names
+      - name: Fix mangled file names
+        run: |
+          cd src/core/operations
+          for k in Encode Decode; do
+            if [ -f "Vigen#U00e8re$k.mjs" ]; then mv "Vigen#U00e8re$k.mjs" "Vigenere$k.mjs"; fi
+          done
+          ls | grep -i vigen
+
       - name: Generate CyberChef operation config
         run: npx grunt exec:generateConfig
 
